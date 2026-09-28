@@ -1,7 +1,14 @@
-# CP5 — Cấu hình deploy Render (dùng nếu bạn chọn Render).
+# CP5 — Render Blueprint: web service (Docker) + Key Value (Redis-compatible).
 #
 # Render đọc file này khi bạn tạo Blueprint từ repo GitHub.
-# `sync: false` = Render hỏi giá trị lúc deploy, KHÔNG lưu secret vào repo.
+#   - AGENT_API_KEY: `generateValue: true` → Render tự sinh khóa ngẫu nhiên,
+#     không có giá trị nào nằm trong repo. Xem/copy khóa trong dashboard
+#     (Environment) khi cần gọi /ask.
+#   - REDIS_URL: lấy connection string nội bộ của Key Value instance.
+#   - `autoDeployTrigger: off`: Render KHÔNG tự deploy theo từng commit.
+#     Deploy do job `deploy` của GitHub Actions gọi Deploy Hook, sau khi
+#     test + docker + compose-smoke đều xanh (secret RENDER_DEPLOY_HOOK_URL).
+#   - Cả hai service cùng region để nối nhau qua mạng nội bộ.
 
 services:
   - type: web
@@ -9,10 +16,12 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     plan: free
+    region: singapore
     healthCheckPath: /health
+    autoDeployTrigger: "off"
     envVars:
       - key: AGENT_API_KEY
-        sync: false
+        generateValue: true
       - key: LOG_LEVEL
         value: INFO
       - key: RATE_LIMIT_PER_MINUTE
@@ -22,10 +31,13 @@ services:
       - key: REDIS_URL
         fromService:
           name: day12-redis
-          type: redis
+          type: keyvalue
           property: connectionString
 
-  - type: redis
+  - type: keyvalue
     name: day12-redis
     plan: free
+    region: singapore
+    # Danh sách rỗng = chặn mọi kết nối từ Internet, chỉ service nội bộ
+    # cùng region mới nối được.
     ipAllowList: []
