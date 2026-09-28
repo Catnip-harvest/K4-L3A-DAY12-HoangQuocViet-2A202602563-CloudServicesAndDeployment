@@ -21,7 +21,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from utils.mock_llm import ask_llm
 
@@ -67,7 +67,22 @@ def get_cost_guard() -> CostGuard:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """CHO SẴN — chạy lúc app khởi động và lúc tắt."""
+    """Chạy lúc app khởi động và lúc tắt.
+
+    Đọc cấu hình NGAY lúc khởi động để fail fast: thiếu ``AGENT_API_KEY`` thì
+    container chết từ đầu và platform giữ bản deploy cũ, thay vì khởi động
+    "khỏe mạnh" rồi trả 500 cho mọi request cần cấu hình. Log chỉ ghi TÊN
+    trường lỗi, không ghi giá trị.
+    """
+    try:
+        get_settings()
+    except ValidationError as error:
+        log_event(
+            "config_invalid",
+            level="error",
+            fields=[".".join(str(part) for part in item["loc"]) for item in error.errors()],
+        )
+        raise
     lifecycle.install()
     log_event("service_started", service=SERVICE_NAME, version=SERVICE_VERSION)
     yield
