@@ -1,24 +1,15 @@
 # ═══════════════════════════════════════════════════════════════════
-# CP2 — Stack chạy ở máy bạn: agent + redis (+ nginx nếu làm phần cộng điểm)
+# CP2 — Stack chạy ở máy bạn: agent + redis (+ nginx load balancer)
 #
-# Service `redis` đã cho sẵn — chạy ngay từ Block 1 để có Redis mà code:
-#     docker compose up -d redis
+# Một instance (agent :8000 + redis):
+#     docker compose up -d --build
 #
-# NHIỆM VỤ: bổ sung service `agent`. Yêu cầu:
-#   [ ] build từ Dockerfile trong thư mục hiện tại
-#   [ ] map cổng ra ngoài (8000:8000)
-#   [ ] KHÔNG viết secret thẳng vào file này — dùng nội suy biến môi trường
-#       `${AGENT_API_KEY}` (docker compose tự đọc từ file .env cùng thư mục)
-#   [ ] REDIS_URL trỏ tới `redis://redis:6379/0` — trong compose, tên service
-#       chính là hostname
-#   [ ] depends_on: redis
-#   [ ] healthcheck gọi /health
+# Ba replica sau nginx (:8080), dùng thêm file override bỏ cổng host của
+# agent để scale được:
+#     docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile lb up -d --build --scale agent=3
 #
-# MỞ RỘNG TÙY CHỌN: thêm service `nginx` làm load balancer
-# (không phải bonus chấm điểm riêng; nginx/nginx.conf đã có sẵn)
-#     docker compose up --scale agent=3
-#
-# Kiểm tra: pytest tests/test_cp2.py -v
+# Secret KHÔNG nằm ở đây: AGENT_API_KEY được compose đọc từ file .env
+# (đã .gitignore) cùng thư mục.
 # ═══════════════════════════════════════════════════════════════════
 
 services:
@@ -35,10 +26,45 @@ services:
       timeout: 3s
       retries: 5
 
-  # TODO (CP2): khai báo service `agent` ở đây
-  # agent:
-  #   build: .
-  #   ...
+  agent:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      AGENT_API_KEY: ${AGENT_API_KEY}
+      REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-10}
+      MONTHLY_BUDGET_USD: ${MONTHLY_BUDGET_USD:-10.0}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    # Đợi uvicorn xử lý nốt request đang chạy trước khi Docker SIGKILL
+    stop_grace_period: 20s
+    restart: unless-stopped
+
+  # Load balancer round-robin trước các replica `agent`.
+  # Chỉ bật khi có `--profile lb`, nên `docker compose up` thường vẫn là agent + redis.
+  nginx:
+    image: nginx:1.27-alpine
+    profiles: ["lb"]
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      agent:
+        condition: service_healthy
 
 volumes:
   redis-data:

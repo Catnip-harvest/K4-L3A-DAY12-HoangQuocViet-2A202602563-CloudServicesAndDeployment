@@ -1,0 +1,12 @@
+# Override để scale `agent` ra nhiều replica sau nginx.
+#
+# Ba container không thể cùng giữ cổng host 8000, nên file này bỏ ánh xạ cổng
+# của agent; mọi request đi vào qua nginx ở http://localhost:8080.
+#
+#     docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile lb up -d --build --scale agent=3
+#
+# `!reset` cần Docker Compose v2.24.4 trở lên.
+
+services:
+  agent:
+    ports: !reset []
