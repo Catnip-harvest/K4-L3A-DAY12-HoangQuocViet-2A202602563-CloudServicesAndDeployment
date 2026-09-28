@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Day 12 Agent</title>
+  <meta name="description" content="Hỏi đáp với agent chạy trên FastAPI, Redis và Docker.">
+  <meta name="theme-color" content="#F4F6FA">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231E293B'/%3E%3Crect x='8.5' y='12' width='15' height='11' rx='2.5' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Cpath d='M16 12V8' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;display=swap">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <!-- Icons: Lucide (https://lucide.dev), ISC License, Copyright (c) Lucide Contributors -->
+  <svg class="sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+    <symbol id="i-bot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/>
+    </symbol>
+    <symbol id="i-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m15.5 7.5 2.3 2.3a1 1 0 0 0 1.4 0l2.1-2.1a1 1 0 0 0 0-1.4L19 4"/><path d="m21 2-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/>
+    </symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>
+    </symbol>
+    <symbol id="i-eye-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49"/><path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/><path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143"/><path d="m2 2 20 20"/>
+    </symbol>
+    <symbol id="i-arrow-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>
+    </symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m6 9 6 6 6-6"/>
+    </symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
+    </symbol>
+    <symbol id="i-refresh-cw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>
+    </symbol>
+    <symbol id="i-rotate-ccw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
+    </symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+    </symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+    </symbol>
+    <symbol id="i-wallet" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/>
+    </symbol>
+    <symbol id="i-circle-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>
+    </symbol>
+    <symbol id="i-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>
+    </symbol>
+    <symbol id="i-wrench" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+    </symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+    </symbol>
+    <symbol id="i-eraser" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>
+    </symbol>
+  </svg>
+
+  <div class="app">
+    <header class="topbar">
+      <div class="topbar__inner">
+        <div class="brand">
+          <span class="brand__mark" aria-hidden="true"><svg class="icon"><use href="#i-bot"/></svg></span>
+          <div class="brand__text">
+            <h1 class="brand__name">Day 12 Agent</h1>
+            <p class="brand__sub">FastAPI · Redis · Docker</p>
+          </div>
+        </div>
+
+        <div class="topbar__actions">
+          <button type="button" id="status-button" class="pill" data-state="checking" data-tone="neutral"
+                  aria-expanded="false" aria-controls="status-popover"
+                  aria-label="Trạng thái dịch vụ: đang kiểm tra">
+            <span class="pill__dot" aria-hidden="true"></span>
+            <span class="pill__label pill__label--long" id="status-long">Đang kiểm tra</span>
+            <span class="pill__label pill__label--short" id="status-short" aria-hidden="true">Đang kiểm tra</span>
+          </button>
+
+          <button type="button" id="connect-button" class="conn" data-key="missing" aria-label="Kết nối">
+            <svg class="icon"><use href="#i-key"/></svg>
+            <span class="conn__user" id="connect-user"></span>
+            <span class="conn__dot" aria-hidden="true"></span>
+          </button>
+
+          <div id="status-popover" class="popover" role="dialog" aria-labelledby="status-title" hidden>
+            <p id="status-title" class="popover__title">Trạng thái dịch vụ</p>
+            <p id="status-summary" class="popover__summary">Đang gọi /health và /ready.</p>
+            <dl class="probes">
+              <div class="probe">
+                <dt><span class="probe__path">GET /health</span><span id="health-code" class="code-tag">…</span></dt>
+                <dd id="health-body">Đang chờ phản hồi…</dd>
+              </div>
+              <div class="probe">
+                <dt><span class="probe__path">GET /ready</span><span id="ready-code" class="code-tag">…</span></dt>
+                <dd id="ready-body">Đang chờ phản hồi…</dd>
+              </div>
+            </dl>
+            <div class="popover__foot">
+              <span id="status-time">Tự kiểm tra mỗi 15 giây</span>
+              <button type="button" id="status-refresh" class="btn btn--ghost btn--sm">
+                <svg class="icon"><use href="#i-refresh-cw"/></svg><span>Kiểm tra ngay</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <main id="scroller" class="scroller">
+      <div class="column">
+        <section id="empty" class="empty" aria-labelledby="empty-title">
+          <h2 id="empty-title" class="empty__title">Hỏi agent một câu</h2>
+          <p class="empty__lead">Mỗi câu hỏi đi qua xác thực, giới hạn tần suất và kiểm soát chi phí trước khi tới mô hình.</p>
+          <p id="empty-note" class="empty__note" hidden>Đã xoá màn hình. Lịch sử trên máy chủ vẫn còn, nên agent vẫn nhớ các lượt trước.</p>
+          <div class="suggestions">
+            <button type="button" class="suggestion" data-question="Docker là gì?">Docker là gì?</button>
+            <button type="button" class="suggestion" data-question="Vì sao cần /ready?">Vì sao cần /ready?</button>
+            <button type="button" class="suggestion" data-question="Rate limit hoạt động thế nào?">Rate limit hoạt động thế nào?</button>
+          </div>
+        </section>
+
+        <div id="messages" class="messages" role="log" aria-live="polite" aria-label="Hội thoại"></div>
+      </div>
+    </main>
+
+    <footer class="dock">
+      <div class="dock__inner">
+        <form id="composer" class="composer" autocomplete="off" novalidate>
+          <label for="question" class="sr-only">Câu hỏi</label>
+          <textarea id="question" class="composer__input" rows="1" placeholder="Nhập câu hỏi…"
+                    enterkeyhint="send" aria-describedby="composer-hint composer-counter"></textarea>
+          <button type="submit" id="send" class="send" aria-label="Gửi" title="Gửi" disabled>
+            <svg class="icon"><use href="#i-arrow-up"/></svg>
+          </button>
+        </form>
+
+        <div class="dock__meta">
+          <button type="button" id="tools-toggle" class="tools-toggle" aria-expanded="false" aria-controls="tools">
+            <svg class="icon"><use href="#i-wrench"/></svg>
+            <span>Công cụ demo</span>
+            <svg class="icon icon--chevron"><use href="#i-chevron-down"/></svg>
+          </button>
+          <span id="composer-counter" class="counter" hidden></span>
+          <span id="composer-hint" class="dock__hint is-default">Enter để gửi · Shift + Enter để xuống dòng</span>
+        </div>
+
+        <section id="tools" class="tools" aria-label="Công cụ demo" hidden>
+          <div class="tool">
+            <button type="button" id="burst" class="btn btn--secondary btn--sm">
+              <svg class="icon"><use href="#i-activity"/></svg><span id="burst-label">Gửi 12 request liên tiếp</span>
+            </button>
+            <p class="tool__note">Minh hoạ rate limit: các request đầu trả 200, vượt hạn mức sẽ nhận 429.</p>
+          </div>
+          <div id="burst-result" class="burst" hidden>
+            <ol id="burst-chips" class="code-chips" aria-label="Mã trạng thái của từng request"></ol>
+            <p id="burst-summary" class="burst__summary"></p>
+          </div>
+          <div class="tool tool--divided">
+            <button type="button" id="clear" class="btn btn--secondary btn--sm">
+              <svg class="icon"><use href="#i-eraser"/></svg><span>Xoá màn hình</span>
+            </button>
+            <p class="tool__note">Chỉ xoá trên màn hình. Lịch sử hội thoại trong Redis vẫn được giữ.</p>
+          </div>
+        </section>
+      </div>
+    </footer>
+  </div>
+
+  <dialog id="connect-sheet" class="sheet" aria-labelledby="sheet-title">
+    <form id="connect-form" class="sheet__form" method="dialog" autocomplete="off" novalidate>
+      <div class="sheet__head">
+        <h2 id="sheet-title" class="sheet__title">Kết nối</h2>
+        <button type="button" id="sheet-close" class="icon-btn" aria-label="Đóng" title="Đóng">
+          <svg class="icon"><use href="#i-x"/></svg>
+        </button>
+      </div>
+      <p class="sheet__lead">Agent yêu cầu khoá API cho mỗi câu hỏi. Khoá được gửi kèm qua header X-API-Key.</p>
+
+      <div class="field">
+        <label for="api-key" class="field__label">Khoá API</label>
+        <div class="field__control">
+          <input id="api-key" class="field__input field__input--mono" type="password"
+                 autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+                 data-1p-ignore data-lpignore="true" aria-describedby="api-key-hint api-key-error">
+          <button type="button" id="api-key-toggle" class="icon-btn" aria-label="Hiện khoá" aria-pressed="false" title="Hiện khoá">
+            <svg class="icon"><use id="api-key-toggle-icon" href="#i-eye"/></svg>
+          </button>
+        </div>
+        <p id="api-key-hint" class="field__hint">Chỉ giữ trong tab này và tự xoá khi bạn đóng tab.</p>
+        <p id="api-key-error" class="field__error" hidden></p>
+      </div>
+
+      <div class="field">
+        <label for="user-id" class="field__label">Mã người dùng</label>
+        <div class="field__control">
+          <input id="user-id" class="field__input field__input--mono" type="text" maxlength="40"
+                 autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+                 data-1p-ignore data-lpignore="true" aria-describedby="user-id-hint user-id-error">
+          <button type="button" id="user-id-new" class="icon-btn" aria-label="Tạo mã ngẫu nhiên" title="Tạo mã ngẫu nhiên">
+            <svg class="icon"><use href="#i-refresh-cw"/></svg>
+          </button>
+        </div>
+        <p id="user-id-hint" class="field__hint">Mỗi mã có lịch sử, hạn mức và ngân sách riêng. Mã được nhớ trên trình duyệt này.</p>
+        <p id="user-id-error" class="field__error" hidden></p>
+      </div>
+
+      <p id="storage-note" class="sheet__note" hidden>Trình duyệt đang chặn bộ nhớ, nên khoá và mã người dùng chỉ được giữ đến khi tải lại trang.</p>
+      <p id="sheet-status" class="sheet__status" role="status"></p>
+
+      <div class="sheet__actions">
+        <button type="button" id="forget-key" class="btn btn--ghost">Quên khoá</button>
+        <button type="submit" class="btn btn--primary">Lưu</button>
+      </div>
+    </form>
+  </dialog>
+
+  <p id="announcer" class="sr-only" role="status" aria-live="polite"></p>
+  <noscript><p class="noscript">Trang này cần bật JavaScript để hỏi agent.</p></noscript>
+</body>
+</html>
