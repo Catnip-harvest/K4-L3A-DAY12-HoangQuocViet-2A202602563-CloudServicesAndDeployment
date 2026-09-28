@@ -13,11 +13,14 @@ Luồng một request tới /ask:
 
 from __future__ import annotations
 
+import socket
 from contextlib import asynccontextmanager
 from functools import lru_cache
+from pathlib import Path
 
 from fastapi import Depends, FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from utils.mock_llm import ask_llm
@@ -32,6 +35,14 @@ from .store import ConversationStore, get_redis_client
 
 SERVICE_NAME = "day12-agent"
 SERVICE_VERSION = "1.0.0"
+
+# Tên container/máy đang phục vụ request — khi scale lên nhiều replica sau
+# nginx, trường này cho thấy request nào rơi vào replica nào.
+INSTANCE_NAME = socket.gethostname()
+
+# Giao diện chat tĩnh (HTML/CSS/JS) phục vụ ngay từ service này.
+STATIC_DIR = Path(__file__).parent / "static"
+INDEX_FILE = STATIC_DIR / "index.html"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -77,12 +88,16 @@ class AskRequest(BaseModel):
 def health():
     """Liveness probe — process còn sống không?
 
-    Trả ``{"status": "ok", "service": ..., "version": ...}`` với mã 200.
+    Đang tắt dần (đã nhận SIGTERM) → 503 ``{"status": "shutting_down"}`` để
+    load balancer ngừng gửi request mới vào đây. Bình thường → 200
+    ``{"status": "ok", "service": ..., "version": ...}``.
 
     Endpoint này phải **nhẹ**: không gọi Redis, không query DB. Nó chỉ trả
     lời câu hỏi "có cần restart container này không?". Nếu nó phụ thuộc
     Redis, Redis chết một nhịp là cả cụm container bị restart theo.
     """
+    if lifecycle.shutting_down:
+        return JSONResponse(status_code=503, content={"status": "shutting_down"})
     return {"status": "ok", "service": SERVICE_NAME, "version": SERVICE_VERSION}
 
 
@@ -90,15 +105,18 @@ def health():
 def ready(store: ConversationStore = Depends(get_store)):
     """Readiness probe — đã sẵn sàng nhận traffic chưa?
 
-    TODO (CP4):
       - Đang tắt dần → 503 ``{"status": "shutting_down"}``
-      - ``store.ping()`` False → 503 ``{"status": "not ready", "redis": False}``
-      - Ngược lại → ``{"status": "ready", "redis": True}``
+      - Redis không trả lời ping → 503 ``{"status": "not ready", "redis": False}``
+      - Ngược lại → 200 ``{"status": "ready", "redis": True}``
 
     Khác /health ở chỗ: endpoint này ĐƯỢC PHÉP kiểm tra dependency. Load
     balancer dùng nó để quyết định có đẩy request vào instance này không.
     """
-    raise NotImplementedError("TODO (CP4): cài đặt /ready")
+    if lifecycle.shutting_down:
+        return JSONResponse(status_code=503, content={"status": "shutting_down"})
+    if not store.ping():
+        return JSONResponse(status_code=503, content={"status": "not ready", "redis": False})
+    return {"status": "ready", "redis": True}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -122,7 +140,7 @@ def ask(
       5. ghi lượt user và lượt assistant vào store
       6. cộng chi phí vừa phát sinh vào ngân sách
       7. ghi log ``ask_completed``
-      8. trả kết quả
+      8. trả kết quả (kèm ``instance`` = hostname của replica đã phục vụ)
 
     Chặn trước rồi mới gọi LLM, vì tiền mất ở bước gọi LLM: chặn sau khi đã
     gọi thì vừa trả tiền vừa trả lỗi.
@@ -146,6 +164,7 @@ def ask(
         tokens_in=result["tokens_in"],
         tokens_out=result["tokens_out"],
         cost_usd=result["cost_usd"],
+        instance=INSTANCE_NAME,
     )
     return {
         "answer": result["answer"],
@@ -153,7 +172,23 @@ def ask(
         "history_length": len(history),
         "cost_usd": result["cost_usd"],
         "tokens": {"in": result["tokens_in"], "out": result["tokens_out"]},
+        "instance": INSTANCE_NAME,
     }
+
+
+# ─────────────────────────────────────────────────────────────
+# Giao diện chat
+# ─────────────────────────────────────────────────────────────
+@app.get("/", include_in_schema=False)
+def index():
+    """Trang chat. Chưa có ``app/static/index.html`` → 404, không crash."""
+    if not INDEX_FILE.is_file():
+        return PlainTextResponse("Not Found", status_code=404)
+    return FileResponse(INDEX_FILE)
+
+
+# check_dir=False: thiếu thư mục static thì app vẫn khởi động được.
+app.mount("/static", StaticFiles(directory=STATIC_DIR, check_dir=False), name="static")
 
 
 if __name__ == "__main__":
