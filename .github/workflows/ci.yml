@@ -1,0 +1,204 @@
+# CI/CD cho Day 12 agent.
+#
+#   test ──┬── docker          (build 2 image, so dung lượng, chạy test build thật, xem layer cache)
+#          └── compose-smoke   (3 replica sau nginx: stateless, readiness, graceful shutdown)
+#                     │
+#   deploy ◄──────────┘        (chỉ push lên main, sau khi cả 3 job trên xanh)
+#
+# Secret duy nhất: RENDER_DEPLOY_HOOK_URL (Settings → Secrets and variables → Actions).
+# Thiếu secret đó thì job deploy chỉ báo notice và thoát 0, để fork vẫn xanh.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    name: Unit tests (CP1-CP4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Giá trị giả cho CI — Settings bắt buộc có khóa, test không cần khóa thật
+      AGENT_API_KEY: ci-dummy
+      REDIS_URL: "fake://"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run checkpoint tests
+        # test_cp5 cần bản deploy đang sống; test_bonus_cicd kiểm tra badge của chính workflow này
+        run: pytest tests/ -v -m "not docker" --ignore=tests/test_cp5.py --ignore=tests/test_bonus_cicd.py
+
+  docker:
+    name: Docker images and layer cache
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build multi-stage image
+        run: docker build -f Dockerfile -t day12-agent:multi .
+
+      - name: Build original single-stage image
+        run: docker build -f Dockerfile.single -t day12-agent:single .
+
+      - name: Compare image sizes
+        run: docker images day12-agent
+
+      - name: Run CP2 tests including the real docker build
+        run: pytest tests/test_cp2.py -v
+
+      - name: Layer cache after a code-only change
+        run: |
+          echo "# CI layer-cache check $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> app/main.py
+          docker build --progress=plain -f Dockerfile -t day12-agent:multi . 2>&1 | tee "$RUNNER_TEMP/rebuild.log"
+          echo
+          echo "===== Build steps: CACHED vs rebuilt ====="
+          awk '
+            /^#[0-9]+ \[/ && !/\[internal\]/ && !/\] FROM / { name[$1] = substr($0, index($0, "[")) }
+            /^#[0-9]+ CACHED/ { if ($1 in name) { print "CACHED   " name[$1]; seen[$1] = 1 } }
+            /^#[0-9]+ DONE/   { if (($1 in name) && !($1 in seen)) { print "REBUILT  " name[$1]; seen[$1] = 1 } }
+          ' "$RUNNER_TEMP/rebuild.log"
+
+  compose-smoke:
+    name: Compose smoke test (3 replicas behind nginx)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COMPOSE: docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile lb
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write runner-local .env with a random API key
+        # Khóa sinh ngẫu nhiên và ghi thẳng vào file, không bao giờ in ra log
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import secrets
+
+          pathlib.Path(".env").write_text(
+              "AGENT_API_KEY=" + secrets.token_urlsafe(32) + "\n", encoding="utf-8"
+          )
+          PY
+
+      - name: Start redis + 3 agent replicas + nginx
+        run: $COMPOSE up -d --build --scale agent=3 --wait --wait-timeout 180
+
+      - name: Show running services
+        run: $COMPOSE ps
+
+      - name: Same user, six requests through nginx
+        run: |
+          python3 - <<'PY'
+          import json
+          import pathlib
+          import urllib.error
+          import urllib.request
+
+          BASE_URL = "http://localhost:8080"
+          env_lines = pathlib.Path(".env").read_text(encoding="utf-8").splitlines()
+          api_key = next(line.split("=", 1)[1] for line in env_lines if line.startswith("AGENT_API_KEY="))
+
+
+          def post_ask(question, headers):
+              request = urllib.request.Request(
+                  BASE_URL + "/ask",
+                  data=json.dumps({"question": question}).encode("utf-8"),
+                  headers={"Content-Type": "application/json", **headers},
+                  method="POST",
+              )
+              with urllib.request.urlopen(request, timeout=15) as response:
+                  return response.status, json.load(response)
+
+
+          try:
+              post_ask("no key", {})
+              raise SystemExit("expected 401 when X-API-Key is missing")
+          except urllib.error.HTTPError as error:
+              assert error.code == 401, error.code
+              print("without X-API-Key -> 401")
+
+          history_lengths, instances = [], []
+          for turn in range(1, 7):
+              status, body = post_ask(
+                  f"turn {turn}", {"X-API-Key": api_key, "X-User-Id": "ci-smoke"}
+              )
+              history_lengths.append(body["history_length"])
+              instances.append(body["instance"])
+              print(
+                  f"request {turn}: status={status} "
+                  f"history_length={body['history_length']} instance={body['instance']}"
+              )
+
+          assert history_lengths == [0, 2, 4, 6, 8, 10], history_lengths
+          distinct = sorted(set(instances))
+          print(f"history grew across replicas; {len(distinct)} distinct instances: {distinct}")
+          if len(distinct) < 2:
+              print("::warning::every request was served by the same replica")
+          PY
+
+      - name: Readiness through nginx
+        run: curl -fsS http://localhost:8080/ready && echo
+
+      - name: Graceful shutdown (SIGTERM, 20 s grace)
+        run: |
+          $COMPOSE stop -t 20 agent
+          $COMPOSE ps -a agent
+          echo "===== last agent log lines ====="
+          $COMPOSE logs --no-color --tail 6 agent
+          stopped=$($COMPOSE logs --no-color agent | grep -c '"event": "service_stopped"' || true)
+          echo "service_stopped events: $stopped"
+          test "$stopped" -ge 3
+
+      - name: Tear down
+        if: always()
+        run: |
+          $COMPOSE down -v --remove-orphans
+          rm -f .env
+
+  deploy:
+    name: Deploy to Render
+    needs: [test, docker, compose-smoke]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Trigger Render deploy hook
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          if [ -z "$HOOK" ]; then
+            echo "::notice::RENDER_DEPLOY_HOOK_URL secret is not set; skipping deploy."
+            exit 0
+          fi
+          curl -fsS -X POST "$HOOK" > /dev/null
+          echo "Render deploy triggered."

@@ -13,11 +13,14 @@ Luồng một request tới /ask:
 
 from __future__ import annotations
 
+import socket
 from contextlib import asynccontextmanager
 from functools import lru_cache
+from pathlib import Path
 
 from fastapi import Depends, FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from utils.mock_llm import ask_llm
@@ -32,6 +35,14 @@ from .store import ConversationStore, get_redis_client
 
 SERVICE_NAME = "day12-agent"
 SERVICE_VERSION = "1.0.0"
+
+# Tên container/máy đang phục vụ request — khi scale lên nhiều replica sau
+# nginx, trường này cho thấy request nào rơi vào replica nào.
+INSTANCE_NAME = socket.gethostname()
+
+# Giao diện chat tĩnh (HTML/CSS/JS) phục vụ ngay từ service này.
+STATIC_DIR = Path(__file__).parent / "static"
+INDEX_FILE = STATIC_DIR / "index.html"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -77,32 +88,35 @@ class AskRequest(BaseModel):
 def health():
     """Liveness probe — process còn sống không?
 
-    TODO (CP1 + CP4):
-      - Đang tắt dần (``lifecycle.shutting_down``) → trả
-        ``JSONResponse(status_code=503, content={"status": "shutting_down"})``
-      - Bình thường → ``{"status": "ok", "service": SERVICE_NAME,
-        "version": SERVICE_VERSION}`` (mặc định FastAPI trả 200).
+    Đang tắt dần (đã nhận SIGTERM) → 503 ``{"status": "shutting_down"}`` để
+    load balancer ngừng gửi request mới vào đây. Bình thường → 200
+    ``{"status": "ok", "service": ..., "version": ...}``.
 
     Endpoint này phải **nhẹ**: không gọi Redis, không query DB. Nó chỉ trả
     lời câu hỏi "có cần restart container này không?". Nếu nó phụ thuộc
     Redis, Redis chết một nhịp là cả cụm container bị restart theo.
     """
-    raise NotImplementedError("TODO (CP1/CP4): cài đặt /health")
+    if lifecycle.shutting_down:
+        return JSONResponse(status_code=503, content={"status": "shutting_down"})
+    return {"status": "ok", "service": SERVICE_NAME, "version": SERVICE_VERSION}
 
 
 @app.get("/ready")
 def ready(store: ConversationStore = Depends(get_store)):
     """Readiness probe — đã sẵn sàng nhận traffic chưa?
 
-    TODO (CP4):
       - Đang tắt dần → 503 ``{"status": "shutting_down"}``
-      - ``store.ping()`` False → 503 ``{"status": "not ready", "redis": False}``
-      - Ngược lại → ``{"status": "ready", "redis": True}``
+      - Redis không trả lời ping → 503 ``{"status": "not ready", "redis": False}``
+      - Ngược lại → 200 ``{"status": "ready", "redis": True}``
 
     Khác /health ở chỗ: endpoint này ĐƯỢC PHÉP kiểm tra dependency. Load
     balancer dùng nó để quyết định có đẩy request vào instance này không.
     """
-    raise NotImplementedError("TODO (CP4): cài đặt /ready")
+    if lifecycle.shutting_down:
+        return JSONResponse(status_code=503, content={"status": "shutting_down"})
+    if not store.ping():
+        return JSONResponse(status_code=503, content={"status": "not ready", "redis": False})
+    return {"status": "ready", "redis": True}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -118,34 +132,63 @@ def ask(
 ):
     """Hỏi agent một câu.
 
-    TODO (CP3 + CP4) — làm ĐÚNG THỨ TỰ sau:
-      1. ``limiter.check(user_id)``           → 429 nếu gọi quá nhanh
-      2. ``guard.check(user_id)``             → 402 nếu hết ngân sách
-      3. ``history = store.get_history(user_id)``
-      4. ``result = ask_llm(payload.question, history)``
-      5. ``store.append(user_id, "user", payload.question)`` và
-         ``store.append(user_id, "assistant", result["answer"])``
-      6. ``guard.record(user_id, result["cost_usd"])``
-      7. ``log_event("ask_completed", user_id=user_id,
-         tokens_in=result["tokens_in"], tokens_out=result["tokens_out"],
-         cost_usd=result["cost_usd"])``
-      8. trả về::
+    Thứ tự xử lý:
+      1. rate limit (429 nếu gọi quá nhanh)
+      2. cost guard (402 nếu hết ngân sách)
+      3. đọc lịch sử hội thoại từ store
+      4. gọi LLM với câu hỏi + lịch sử
+      5. ghi lượt user và lượt assistant vào store
+      6. cộng chi phí vừa phát sinh vào ngân sách
+      7. ghi log ``ask_completed``
+      8. trả kết quả (kèm ``instance`` = hostname của replica đã phục vụ)
 
-            {
-                "answer": result["answer"],
-                "user_id": user_id,
-                "history_length": len(history),
-                "cost_usd": result["cost_usd"],
-                "tokens": {"in": result["tokens_in"], "out": result["tokens_out"]},
-            }
-
-    Vì sao check trước rồi mới gọi LLM? Vì tiền mất ở bước gọi LLM. Chặn sau
-    khi đã gọi thì bạn vừa trả tiền vừa trả lỗi.
+    Chặn trước rồi mới gọi LLM, vì tiền mất ở bước gọi LLM: chặn sau khi đã
+    gọi thì vừa trả tiền vừa trả lỗi.
 
     ``user_id`` do ``verify_api_key`` trả về, nên request không có API key
-    hợp lệ sẽ dừng ở 401 trước khi chạm vào bất cứ dòng nào ở đây.
+    hợp lệ đã dừng ở 401 trước khi chạm vào bất cứ dòng nào ở đây.
     """
-    raise NotImplementedError("TODO (CP3/CP4): cài đặt /ask")
+    limiter.check(user_id)
+    guard.check(user_id)
+
+    history = store.get_history(user_id)
+    result = ask_llm(payload.question, history)
+
+    store.append(user_id, "user", payload.question)
+    store.append(user_id, "assistant", result["answer"])
+    guard.record(user_id, result["cost_usd"])
+
+    log_event(
+        "ask_completed",
+        user_id=user_id,
+        tokens_in=result["tokens_in"],
+        tokens_out=result["tokens_out"],
+        cost_usd=result["cost_usd"],
+        instance=INSTANCE_NAME,
+    )
+    return {
+        "answer": result["answer"],
+        "user_id": user_id,
+        "history_length": len(history),
+        "cost_usd": result["cost_usd"],
+        "tokens": {"in": result["tokens_in"], "out": result["tokens_out"]},
+        "instance": INSTANCE_NAME,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# Giao diện chat
+# ─────────────────────────────────────────────────────────────
+@app.get("/", include_in_schema=False)
+def index():
+    """Trang chat. Chưa có ``app/static/index.html`` → 404, không crash."""
+    if not INDEX_FILE.is_file():
+        return PlainTextResponse("Not Found", status_code=404)
+    return FileResponse(INDEX_FILE)
+
+
+# check_dir=False: thiếu thư mục static thì app vẫn khởi động được.
+app.mount("/static", StaticFiles(directory=STATIC_DIR, check_dir=False), name="static")
 
 
 if __name__ == "__main__":

@@ -15,9 +15,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Toàn bộ cấu hình của service.
 
-    TODO (CP1): khai báo các trường dưới đây. pydantic-settings tự đọc biến
-    môi trường theo tên trường (không phân biệt hoa thường), nên trường
-    ``agent_api_key`` sẽ lấy giá trị từ biến ``AGENT_API_KEY``.
+    pydantic-settings tự đọc biến môi trường theo tên trường (không phân biệt
+    hoa thường), nên trường ``agent_api_key`` lấy giá trị từ ``AGENT_API_KEY``.
 
     | Trường                  | Kiểu  | Mặc định                   |
     |-------------------------|-------|----------------------------|
@@ -28,10 +27,9 @@ class Settings(BaseSettings):
     | monthly_budget_usd      | float | 10.0                       |
     | log_level               | str   | "INFO"                     |
 
-    Vì sao ``agent_api_key`` không được có giá trị mặc định? Vì mặc định
-    nghĩa là app vẫn khởi động khi bạn quên set secret trên cloud — và bạn
-    chỉ phát hiện ra khi ai đó đã gọi API miễn phí bằng khóa mặc định đó.
-    Không mặc định = fail fast ngay lúc khởi động.
+    ``agent_api_key`` cố ý không có mặc định: thiếu secret trên cloud thì app
+    chết ngay lúc khởi động (fail fast), thay vì chạy với một khóa mặc định
+    mà ai cũng đoán được.
     """
 
     model_config = SettingsConfigDict(
@@ -40,9 +38,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # TODO (CP1): khai báo 6 trường theo bảng trên, ví dụ:
-    #     port: int = 8000
-    #     agent_api_key: str
+    port: int = 8000
+    agent_api_key: str
+    redis_url: str = "redis://localhost:6379/0"
+    rate_limit_per_minute: int = 10
+    monthly_budget_usd: float = 10.0
+    log_level: str = "INFO"
 
 
 @lru_cache(maxsize=1)
