@@ -96,7 +96,7 @@ HTTP/1.1 401 Unauthorized
 
 ## Ảnh Chụp Màn Hình
 
-- `screenshots/dashboard.png` — trang service `day12-agent` trên Render (deploy Live, repo và nhánh `main`)
+- `screenshots/dashboard.png` — trang Deploys của service `day12-agent` trên Render: repo, nhánh `main`, Public URL; deploy đầu (`306b897`, code gốc chưa làm) thất bại, deploy `d15b619` đang build — đúng diễn biến ở mục sự cố bên dưới
 - `screenshots/health.png` — `/health` mở trực tiếp trên trình duyệt
 - `screenshots/chat-ui.png` — giao diện chat chạy trên Public URL: trạng thái "Sẵn sàng" (`/health` + `/ready`), hai lượt hỏi của cùng một user, `history_length` 0 → 2 nhờ Redis
 
